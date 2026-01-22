@@ -6,13 +6,20 @@ import csv
 from io import StringIO, BytesIO
 from flask_cors import CORS
 
-app = Flask(__name__, template_folder='templates', static_folder='static')
-CORS(app)  # Enable CORS for all routes
+app = Flask(__name__, template_folder='.', static_folder='static')
+app_has_started = False
 
-# Buat folder untuk penyimpanan data jika belum ada
+@app.before_request
+def startup_tasks():
+    global app_has_started
+    if not app_has_started:
+        initialize_data_files()
+        app_has_started = True
+
+CORS(app)
+
 os.makedirs('data', exist_ok=True)
 os.makedirs('static', exist_ok=True)
-os.makedirs('templates', exist_ok=True)
 
 # File data path
 USERS_FILE = 'data/users.json'
@@ -133,7 +140,6 @@ def load_data(file_path, default_data=None):
             return {}
     except (json.JSONDecodeError, FileNotFoundError) as e:
         print(f"Error loading {file_path}: {e}")
-        # Return empty data and try to recreate file
         if default_data is not None:
             with open(file_path, 'w', encoding='utf-8') as f:
                 json.dump(default_data, f, indent=2, ensure_ascii=False)
@@ -150,17 +156,15 @@ def save_data(file_path, data):
         print(f"Error saving data to {file_path}: {e}")
         return False
 
-# Initialize data files when app starts
 initialize_data_files()
 
-# Load initial data
 users = load_data(USERS_FILE, {})
 transactions = load_data(TRANSACTIONS_FILE, {})
 settings = load_data(SETTINGS_FILE, {})
 
 @app.route('/')
 def index():
-    """Render halaman utama dari templates/index.html"""
+    """Render halaman utama"""
     try:
         return render_template('index.html')
     except Exception as e:
@@ -173,6 +177,8 @@ def index():
             h1 {{ color: #1e3a8a; }}
             .error {{ color: #ef4444; background: #fecaca; padding: 15px; border-radius: 10px; margin: 20px 0; }}
             .info {{ background: #dbeafe; padding: 15px; border-radius: 10px; margin: 20px 0; }}
+            .btn {{ background: #3b82f6; color: white; padding: 12px 24px; border: none; border-radius: 8px; cursor: pointer; text-decoration: none; display: inline-block; margin: 10px 5px; }}
+            .btn:hover {{ background: #2563eb; }}
         </style>
         </head>
         <body>
@@ -182,19 +188,11 @@ def index():
                     <strong>Error:</strong> {str(e)}
                 </div>
                 <div class="info">
-                    <p>File <code>index.html</code> tidak ditemukan di folder <code>templates/</code>.</p>
-                    <p>Pastikan struktur folder Anda seperti ini:</p>
-                    <pre>
-DH_FINANCE/
-├── app.py
-├── templates/
-│   └── index.html
-├── data/
-│   ├── users.json
-│   ├── transactions.json
-│   └── settings.json
-└── static/
-                    </pre>
+                    <h3>File index.html tidak ditemukan</h3>
+                    <p>Pastikan file <code>index.html</code> berada di folder yang sama dengan <code>app.py</code></p>
+                    <p>Atau download file HTML yang sudah diperbarui:</p>
+                    <a href="/api/download-html" class="btn">Download index.html</a>
+                    <a href="/api/health" class="btn">Check Server Health</a>
                 </div>
                 <div class="info">
                     <p>Server API berjalan dengan baik. Endpoint yang tersedia:</p>
@@ -206,12 +204,68 @@ DH_FINANCE/
                         <li><code>DELETE /api/transactions/ID?username=USERNAME</code> - Hapus transaksi</li>
                         <li><code>GET /api/export/excel?username=USERNAME</code> - Ekspor ke Excel</li>
                         <li><code>GET /api/export/word?username=USERNAME</code> - Ekspor ke Word</li>
+                        <li><code>GET /api/stats?username=USERNAME</code> - Get statistik</li>
+                        <li><code>GET /api/currencies</code> - Get daftar mata uang</li>
                     </ul>
                 </div>
             </div>
         </body>
         </html>
         """
+
+@app.route('/api/download-html', methods=['GET'])
+def download_html():
+    """Download HTML file template"""
+    html_content = """<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DH Finance - Aplikasi Keuangan Pribadi</title>
+    <!-- CSS and JS akan dimuat dari server -->
+</head>
+<body>
+    <div id="app">
+        Loading DH Finance...
+    </div>
+    <script>
+        // Aplikasi akan dimuat secara dinamis
+        fetch('/')
+            .then(response => response.text())
+            .then(html => {
+                document.body.innerHTML = html;
+                // Load scripts dynamically
+                const scripts = document.querySelectorAll('script');
+                scripts.forEach(script => {
+                    if (script.src) {
+                        const newScript = document.createElement('script');
+                        newScript.src = script.src;
+                        document.head.appendChild(newScript);
+                    }
+                });
+            })
+            .catch(error => {
+                document.getElementById('app').innerHTML = 
+                    '<div style="padding: 40px; text-align: center; color: #ef4444;">' +
+                    '<h2>Error loading application</h2>' +
+                    '<p>' + error.message + '</p>' +
+                    '<a href="/api/health">Check server status</a>' +
+                    '</div>';
+            });
+    </script>
+</body>
+</html>"""
+    
+    mem = BytesIO()
+    mem.write(html_content.encode('utf-8'))
+    mem.seek(0)
+    
+    return send_file(
+        mem,
+        as_attachment=True,
+        download_name='index.html',
+        mimetype='text/html'
+    )
 
 @app.route('/static/<path:path>')
 def serve_static(path):
@@ -233,12 +287,9 @@ def login():
                 'message': 'Username dan password harus diisi'
             })
         
-        # Reload users data
         users = load_data(USERS_FILE, {})
         
-        # Cek user
         if username in users and users[username].get('password') == password:
-            # Update last login
             users[username]['lastLogin'] = datetime.now().isoformat()
             save_data(USERS_FILE, users)
             
@@ -273,7 +324,6 @@ def register():
         email = data.get('email', '').strip()
         password = data.get('password', '').strip()
         
-        # Validasi
         if not username or not password:
             return jsonify({
                 'success': False,
@@ -292,7 +342,6 @@ def register():
                 'message': 'Password minimal 6 karakter'
             })
         
-        # Reload data
         users = load_data(USERS_FILE, {})
         
         if username in users:
@@ -301,7 +350,6 @@ def register():
                 'message': 'Username sudah terdaftar'
             })
         
-        # Create new user
         users[username] = {
             'password': password,
             'email': email,
@@ -309,21 +357,18 @@ def register():
             'lastLogin': datetime.now().isoformat()
         }
         
-        # Initialize user settings
-        settings = load_data(SETTINGS_FILE, {})
-        if username not in settings:
-            settings[username] = {
+        settings_data = load_data(SETTINGS_FILE, {})
+        if username not in settings_data:
+            settings_data[username] = {
                 'currency': 'IDR'
             }
         
-        # Initialize empty transactions
         transactions_data = load_data(TRANSACTIONS_FILE, {})
         if username not in transactions_data:
             transactions_data[username] = []
         
-        # Save data
         save_data(USERS_FILE, users)
-        save_data(SETTINGS_FILE, settings)
+        save_data(SETTINGS_FILE, settings_data)
         save_data(TRANSACTIONS_FILE, transactions_data)
         
         return jsonify({
@@ -339,9 +384,10 @@ def register():
 
 @app.route('/api/transactions', methods=['GET'])
 def get_transactions():
-    """API untuk mendapatkan transaksi user"""
+    """API untuk mendapatkan transaksi user dengan filter"""
     try:
         username = request.args.get('username')
+        filter_date = request.args.get('filterDate')
         
         if not username:
             return jsonify({
@@ -354,11 +400,34 @@ def get_transactions():
         if username not in transactions_data:
             transactions_data[username] = []
             save_data(TRANSACTIONS_FILE, transactions_data)
-            
+            return jsonify({
+                'success': True,
+                'transactions': [],
+                'count': 0,
+                'filtered': False
+            })
+        
+        user_transactions = transactions_data[username]
+        
+        # Apply filter if provided
+        if filter_date:
+            filtered_transactions = [
+                t for t in user_transactions 
+                if t.get('date') == filter_date
+            ]
+            return jsonify({
+                'success': True,
+                'transactions': filtered_transactions,
+                'count': len(filtered_transactions),
+                'filtered': True,
+                'filterDate': filter_date
+            })
+        
         return jsonify({
             'success': True,
-            'transactions': transactions_data[username],
-            'count': len(transactions_data[username])
+            'transactions': user_transactions,
+            'count': len(user_transactions),
+            'filtered': False
         })
         
     except Exception as e:
@@ -380,30 +449,36 @@ def add_transaction():
                 'message': 'Username tidak ditemukan'
             })
         
-        # Load current transactions
         transactions_data = load_data(TRANSACTIONS_FILE, {})
         
-        # Initialize if not exists
         if username not in transactions_data:
             transactions_data[username] = []
         
-        # Get the highest ID
+        # Generate new ID
         existing_ids = [t.get('id', 0) for t in transactions_data[username]]
         new_id = max(existing_ids) + 1 if existing_ids else 1
         
-        # Create new transaction
+        # Validate proof URL if provided
+        has_proof = data.get('hasProof', False)
+        proof_details = data.get('proofDetails', '')
+        
+        if has_proof and proof_details:
+            if not proof_details.startswith('http://') and not proof_details.startswith('https://'):
+                proof_details = 'https://' + proof_details
+        elif not has_proof:
+            proof_details = 'Tidak ada bukti transfer'
+        
         new_transaction = {
             'id': new_id,
             'type': data.get('type', 'expense'),
             'amount': float(data.get('amount', 0)),
             'description': data.get('description', 'Tanpa keterangan'),
             'date': data.get('date', datetime.now().strftime('%Y-%m-%d')),
-            'hasProof': data.get('hasProof', False),
-            'proofDetails': data.get('proofDetails', 'Tidak ada bukti transfer'),
+            'hasProof': has_proof,
+            'proofDetails': proof_details,
             'createdAt': datetime.now().isoformat()
         }
         
-        # Add transaction
         transactions_data[username].append(new_transaction)
         save_data(TRANSACTIONS_FILE, transactions_data)
         
@@ -431,7 +506,6 @@ def delete_transaction(transaction_id):
                 'message': 'Username tidak ditemukan'
             })
         
-        # Load current transactions
         transactions_data = load_data(TRANSACTIONS_FILE, {})
         
         if username not in transactions_data:
@@ -440,24 +514,32 @@ def delete_transaction(transaction_id):
                 'message': 'User tidak ditemukan'
             })
         
-        # Find and remove transaction
-        initial_length = len(transactions_data[username])
+        # Find the transaction
+        transaction_to_delete = None
+        for t in transactions_data[username]:
+            if t.get('id') == transaction_id:
+                transaction_to_delete = t
+                break
+        
+        if not transaction_to_delete:
+            return jsonify({
+                'success': False,
+                'message': 'Transaksi tidak ditemukan'
+            })
+        
+        # Remove the transaction
         transactions_data[username] = [
             t for t in transactions_data[username] 
             if t.get('id') != transaction_id
         ]
         
-        if len(transactions_data[username]) < initial_length:
-            save_data(TRANSACTIONS_FILE, transactions_data)
-            return jsonify({
-                'success': True,
-                'message': 'Transaksi berhasil dihapus!'
-            })
-        else:
-            return jsonify({
-                'success': False,
-                'message': 'Transaksi tidak ditemukan'
-            })
+        save_data(TRANSACTIONS_FILE, transactions_data)
+        
+        return jsonify({
+            'success': True,
+            'message': 'Transaksi berhasil dihapus!',
+            'deletedTransaction': transaction_to_delete
+        })
             
     except Exception as e:
         return jsonify({
@@ -518,7 +600,90 @@ def update_currency():
         
         return jsonify({
             'success': True,
-            'message': 'Mata uang berhasil diupdate'
+            'message': 'Mata uang berhasil diupdate',
+            'currency': currency
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Terjadi kesalahan: {str(e)}'
+        })
+
+@app.route('/api/currencies', methods=['GET'])
+def get_currencies():
+    """API untuk mendapatkan daftar mata uang yang tersedia"""
+    currencies = {
+        'IDR': {'symbol': 'Rp', 'name': 'Rupiah Indonesia'},
+        'USD': {'symbol': '$', 'name': 'US Dollar'},
+        'EUR': {'symbol': '€', 'name': 'Euro'},
+        'GBP': {'symbol': '£', 'name': 'British Pound'},
+        'JPY': {'symbol': '¥', 'name': 'Japanese Yen'},
+        'SGD': {'symbol': 'S$', 'name': 'Singapore Dollar'},
+        'THB': {'symbol': '฿', 'name': 'Baht Thailand'},
+        'KHR': {'symbol': '៛', 'name': 'Riel Kamboja'}
+    }
+    
+    return jsonify({
+        'success': True,
+        'currencies': currencies
+    })
+
+@app.route('/api/stats', methods=['GET'])
+def get_stats():
+    """API untuk mendapatkan statistik user dengan filter"""
+    try:
+        username = request.args.get('username')
+        filter_date = request.args.get('filterDate')
+        
+        if not username:
+            return jsonify({
+                'success': False,
+                'message': 'Username tidak ditemukan'
+            })
+        
+        transactions_data = load_data(TRANSACTIONS_FILE, {})
+        settings_data = load_data(SETTINGS_FILE, {})
+        
+        if username not in transactions_data:
+            return jsonify({
+                'success': True,
+                'stats': {
+                    'totalIncome': 0,
+                    'totalExpense': 0,
+                    'balance': 0,
+                    'transactionCount': 0,
+                    'currency': settings_data.get(username, {}).get('currency', 'IDR'),
+                    'filtered': False
+                }
+            })
+        
+        user_transactions = transactions_data[username]
+        
+        # Apply filter if provided
+        if filter_date:
+            user_transactions = [
+                t for t in user_transactions 
+                if t.get('date') == filter_date
+            ]
+        
+        total_income = sum(t.get('amount', 0) for t in user_transactions if t.get('type') == 'income')
+        total_expense = sum(t.get('amount', 0) for t in user_transactions if t.get('type') == 'expense')
+        balance = total_income - total_expense
+        
+        user_currency = settings_data.get(username, {}).get('currency', 'IDR')
+        
+        return jsonify({
+            'success': True,
+            'stats': {
+                'totalIncome': total_income,
+                'totalExpense': total_expense,
+                'balance': balance,
+                'transactionCount': len(user_transactions),
+                'currency': user_currency,
+                'filtered': filter_date is not None,
+                'filterDate': filter_date
+            }
         })
         
     except Exception as e:
@@ -529,9 +694,10 @@ def update_currency():
 
 @app.route('/api/export/excel', methods=['GET'])
 def export_excel():
-    """API untuk ekspor data ke Excel"""
+    """API untuk ekspor data ke Excel dengan filter"""
     try:
         username = request.args.get('username')
+        filter_date = request.args.get('filterDate')
         
         if not username:
             return jsonify({
@@ -539,7 +705,6 @@ def export_excel():
                 'message': 'Username tidak ditemukan'
             })
         
-        # Load data
         transactions_data = load_data(TRANSACTIONS_FILE, {})
         settings_data = load_data(SETTINGS_FILE, {})
         
@@ -549,18 +714,23 @@ def export_excel():
                 'message': 'User tidak ditemukan'
             })
         
-        # Get user settings
+        user_transactions = transactions_data[username]
+        
+        # Apply filter if provided
+        if filter_date:
+            user_transactions = [
+                t for t in user_transactions 
+                if t.get('date') == filter_date
+            ]
+        
         user_currency = settings_data.get(username, {}).get('currency', 'IDR')
         
-        # Create CSV data
         output = StringIO()
         writer = csv.writer(output)
         
-        # Write header
         writer.writerow(['No', 'Tanggal', 'Jenis', 'Keterangan', 'Jumlah', 'Mata Uang', 'Bukti Transfer', 'Dibuat Pada'])
         
-        # Write data
-        for i, transaction in enumerate(transactions_data[username], 1):
+        for i, transaction in enumerate(user_transactions, 1):
             writer.writerow([
                 i,
                 transaction.get('date', ''),
@@ -572,13 +742,14 @@ def export_excel():
                 transaction.get('createdAt', '')
             ])
         
-        # Create response
         output.seek(0)
         mem = BytesIO()
-        mem.write(output.getvalue().encode('utf-8-sig'))  # utf-8-sig for Excel compatibility
+        mem.write(output.getvalue().encode('utf-8-sig'))
         mem.seek(0)
         
-        filename = f"dh_finance_{username}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        # Create filename with filter info if applicable
+        filter_suffix = f"_filter_{filter_date}" if filter_date else ""
+        filename = f"dh_finance_{username}{filter_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
         
         return send_file(
             mem,
@@ -595,9 +766,10 @@ def export_excel():
 
 @app.route('/api/export/word', methods=['GET'])
 def export_word():
-    """API untuk ekspor data ke Word (HTML format)"""
+    """API untuk ekspor data ke Word (HTML format) dengan filter"""
     try:
         username = request.args.get('username')
+        filter_date = request.args.get('filterDate')
         
         if not username:
             return jsonify({
@@ -605,7 +777,6 @@ def export_word():
                 'message': 'Username tidak ditemukan'
             })
         
-        # Load data
         transactions_data = load_data(TRANSACTIONS_FILE, {})
         settings_data = load_data(SETTINGS_FILE, {})
         
@@ -615,27 +786,46 @@ def export_word():
                 'message': 'User tidak ditemukan'
             })
         
-        # Get user settings
+        user_transactions = transactions_data[username]
+        
+        # Apply filter if provided
+        if filter_date:
+            user_transactions = [
+                t for t in user_transactions 
+                if t.get('date') == filter_date
+            ]
+        
         user_currency = settings_data.get(username, {}).get('currency', 'IDR')
         
-        # Calculate totals
         total_income = sum(
             t.get('amount', 0) 
-            for t in transactions_data[username] 
+            for t in user_transactions 
             if t.get('type') == 'income'
         )
         total_expense = sum(
             t.get('amount', 0) 
-            for t in transactions_data[username] 
+            for t in user_transactions 
             if t.get('type') == 'expense'
         )
         balance = total_income - total_expense
         
-        # Format currency
         def format_currency(amount):
             return f"{amount:,.2f}"
         
-        # Create HTML content
+        # Currency symbols mapping
+        currency_symbols = {
+            'IDR': 'Rp',
+            'USD': '$',
+            'EUR': '€',
+            'GBP': '£',
+            'JPY': '¥',
+            'SGD': 'S$',
+            'THB': '฿',
+            'KHR': '៛'
+        }
+        
+        symbol = currency_symbols.get(user_currency, user_currency)
+        
         html_content = f"""
         <!DOCTYPE html>
         <html>
@@ -653,19 +843,30 @@ def export_word():
                 .expense {{ color: #ef4444; }}
                 .summary {{ background-color: #f8fafc; padding: 20px; border-radius: 10px; margin-top: 30px; }}
                 .footer {{ margin-top: 40px; font-size: 12px; color: #64748b; text-align: center; }}
+                .filter-info {{ background-color: #fef3c7; padding: 15px; border-radius: 8px; margin: 20px 0; }}
             </style>
         </head>
         <body>
             <h1>Laporan Keuangan DH Finance</h1>
             <p><strong>Pengguna:</strong> {username}</p>
             <p><strong>Tanggal Ekspor:</strong> {datetime.now().strftime('%d %B %Y %H:%M:%S')}</p>
-            <p><strong>Mata Uang:</strong> {user_currency}</p>
-            
+            <p><strong>Mata Uang:</strong> {user_currency} ({symbol})</p>
+        """
+        
+        # Add filter info if applicable
+        if filter_date:
+            html_content += f"""
+            <div class="filter-info">
+                <strong>Filter Tanggal:</strong> {filter_date}
+            </div>
+            """
+        
+        html_content += f"""
             <div class="summary">
-                <p><strong>Total Uang Masuk:</strong> <span class="income">{format_currency(total_income)} {user_currency}</span></p>
-                <p><strong>Total Uang Keluar:</strong> <span class="expense">{format_currency(total_expense)} {user_currency}</span></p>
-                <p><strong>Saldo Saat Ini:</strong> <strong>{format_currency(balance)} {user_currency}</strong></p>
-                <p><strong>Jumlah Transaksi:</strong> {len(transactions_data[username])}</p>
+                <p><strong>Total Uang Masuk:</strong> <span class="income">{symbol} {format_currency(total_income)}</span></p>
+                <p><strong>Total Uang Keluar:</strong> <span class="expense">{symbol} {format_currency(total_expense)}</span></p>
+                <p><strong>Saldo Saat Ini:</strong> <strong>{symbol} {format_currency(balance)}</strong></p>
+                <p><strong>Jumlah Transaksi:</strong> {len(user_transactions)}</p>
             </div>
             
             <h2>Detail Transaksi</h2>
@@ -685,17 +886,27 @@ def export_word():
         """
         
         # Add transaction rows
-        for i, transaction in enumerate(transactions_data[username], 1):
+        for i, transaction in enumerate(user_transactions, 1):
             row_class = 'income' if transaction.get('type') == 'income' else 'expense'
             amount_sign = '+' if transaction.get('type') == 'income' else '-'
             amount_formatted = format_currency(transaction.get('amount', 0))
+            
+            # Format date for display
+            trans_date = transaction.get('date', '')
+            try:
+                if trans_date:
+                    date_obj = datetime.strptime(trans_date, '%Y-%m-%d')
+                    trans_date = date_obj.strftime('%d %B %Y')
+            except:
+                pass
+            
             html_content += f"""
                     <tr>
                         <td>{i}</td>
-                        <td>{transaction.get('date', '')}</td>
+                        <td>{trans_date}</td>
                         <td>{'Uang Masuk' if transaction.get('type') == 'income' else 'Uang Keluar'}</td>
                         <td>{transaction.get('description', '')}</td>
-                        <td class="{row_class}">{amount_sign} {amount_formatted} {user_currency}</td>
+                        <td class="{row_class}">{amount_sign} {symbol} {amount_formatted}</td>
                         <td>{transaction.get('proofDetails', '')}</td>
                         <td>{transaction.get('createdAt', '')}</td>
                     </tr>
@@ -713,12 +924,13 @@ def export_word():
         </html>
         """
         
-        # Create response
         mem = BytesIO()
         mem.write(html_content.encode('utf-8'))
         mem.seek(0)
         
-        filename = f"dh_finance_{username}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.doc"
+        # Create filename with filter info if applicable
+        filter_suffix = f"_filter_{filter_date}" if filter_date else ""
+        filename = f"dh_finance_{username}{filter_suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.doc"
         
         return send_file(
             mem,
@@ -726,54 +938,6 @@ def export_word():
             download_name=filename,
             mimetype='application/msword'
         )
-        
-    except Exception as e:
-        return jsonify({
-            'success': False,
-            'message': f'Terjadi kesalahan: {str(e)}'
-        })
-
-@app.route('/api/stats', methods=['GET'])
-def get_stats():
-    """API untuk mendapatkan statistik user"""
-    try:
-        username = request.args.get('username')
-        
-        if not username:
-            return jsonify({
-                'success': False,
-                'message': 'Username tidak ditemukan'
-            })
-        
-        # Load data
-        transactions_data = load_data(TRANSACTIONS_FILE, {})
-        settings_data = load_data(SETTINGS_FILE, {})
-        
-        if username not in transactions_data:
-            return jsonify({
-                'success': False,
-                'message': 'User tidak ditemukan'
-            })
-        
-        # Calculate stats
-        user_transactions = transactions_data[username]
-        total_income = sum(t.get('amount', 0) for t in user_transactions if t.get('type') == 'income')
-        total_expense = sum(t.get('amount', 0) for t in user_transactions if t.get('type') == 'expense')
-        balance = total_income - total_expense
-        
-        # Get currency
-        user_currency = settings_data.get(username, {}).get('currency', 'IDR')
-        
-        return jsonify({
-            'success': True,
-            'stats': {
-                'totalIncome': total_income,
-                'totalExpense': total_expense,
-                'balance': balance,
-                'transactionCount': len(user_transactions),
-                'currency': user_currency
-            }
-        })
         
     except Exception as e:
         return jsonify({
@@ -798,43 +962,166 @@ def init_demo():
             'message': f'Terjadi kesalahan: {str(e)}'
         })
 
+@app.route('/api/backup', methods=['GET'])
+def backup_data():
+    """API untuk backup semua data"""
+    try:
+        users_data = load_data(USERS_FILE, {})
+        transactions_data = load_data(TRANSACTIONS_FILE, {})
+        settings_data = load_data(SETTINGS_FILE, {})
+        
+        backup = {
+            'timestamp': datetime.now().isoformat(),
+            'users': users_data,
+            'transactions': transactions_data,
+            'settings': settings_data
+        }
+        
+        mem = BytesIO()
+        mem.write(json.dumps(backup, indent=2, ensure_ascii=False).encode('utf-8'))
+        mem.seek(0)
+        
+        filename = f"dh_finance_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        
+        return send_file(
+            mem,
+            as_attachment=True,
+            download_name=filename,
+            mimetype='application/json'
+        )
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Terjadi kesalahan: {str(e)}'
+        })
+
+@app.route('/api/restore', methods=['POST'])
+def restore_data():
+    """API untuk restore data dari backup"""
+    try:
+        if 'file' not in request.files:
+            return jsonify({
+                'success': False,
+                'message': 'Tidak ada file yang diupload'
+            })
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({
+                'success': False,
+                'message': 'Tidak ada file yang dipilih'
+            })
+        
+        if not file.filename.endswith('.json'):
+            return jsonify({
+                'success': False,
+                'message': 'File harus berupa JSON'
+            })
+        
+        backup_data = json.loads(file.read().decode('utf-8'))
+        
+        # Validate backup structure
+        required_keys = ['users', 'transactions', 'settings']
+        for key in required_keys:
+            if key not in backup_data:
+                return jsonify({
+                    'success': False,
+                    'message': f'Data backup tidak valid: {key} tidak ditemukan'
+                })
+        
+        # Save backup data
+        save_data(USERS_FILE, backup_data['users'])
+        save_data(TRANSACTIONS_FILE, backup_data['transactions'])
+        save_data(SETTINGS_FILE, backup_data['settings'])
+        
+        return jsonify({
+            'success': True,
+            'message': 'Data berhasil direstore dari backup'
+        })
+        
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'message': f'Terjadi kesalahan: {str(e)}'
+        })
+
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
+    try:
+        users_count = len(load_data(USERS_FILE, {}))
+        transactions_data = load_data(TRANSACTIONS_FILE, {})
+        total_transactions = sum(len(t) for t in transactions_data.values())
+        
+        return jsonify({
+            'status': 'healthy',
+            'timestamp': datetime.now().isoformat(),
+            'data_files': {
+                'users': os.path.exists(USERS_FILE),
+                'transactions': os.path.exists(TRANSACTIONS_FILE),
+                'settings': os.path.exists(SETTINGS_FILE)
+            },
+            'statistics': {
+                'users_count': users_count,
+                'total_transactions': total_transactions,
+                'demo_user_exists': 'demo' in load_data(USERS_FILE, {})
+            }
+        })
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'timestamp': datetime.now().isoformat(),
+            'error': str(e)
+        })
+
+@app.route('/api/notification-test', methods=['GET'])
+def notification_test():
+    """Endpoint untuk testing notifications"""
     return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'data_files': {
-            'users': os.path.exists(USERS_FILE),
-            'transactions': os.path.exists(TRANSACTIONS_FILE),
-            'settings': os.path.exists(SETTINGS_FILE)
-        }
+        'success': True,
+        'notifications': [
+            {
+                'type': 'success',
+                'title': 'Test Success',
+                'message': 'This is a test success notification'
+            },
+            {
+                'type': 'error',
+                'title': 'Test Error',
+                'message': 'This is a test error notification'
+            },
+            {
+                'type': 'info',
+                'title': 'Test Info',
+                'message': 'This is a test info notification'
+            },
+            {
+                'type': 'warning',
+                'title': 'Test Warning',
+                'message': 'This is a test warning notification'
+            }
+        ]
     })
 
-if __name__ == '__main__':
-    # Initialize data files
-    initialize_data_files()
-    
-    print("=" * 50)
-    print("DH Finance Application")
-    print("=" * 50)
-    print(f"Current Working Directory: {os.getcwd()}")
-    print(f"Template Folder: {app.template_folder}")
-    print(f"Static Folder: {app.static_folder}")
-    print("=" * 50)
-    
-    # Check if index.html exists in templates folder
-    template_path = os.path.join('templates', 'index.html')
-    if os.path.exists(template_path):
-        print(f"✓ Found index.html in templates folder")
-    else:
-        print(f"✗ index.html NOT found in templates folder")
-        print(f"  Looking for: {os.path.abspath(template_path)}")
-        print("  Please make sure your HTML file is in the templates folder")
-    
-    print("=" * 50)
-    print("Server running at: http://localhost:5000")
-    print("Demo account: demo / demo123")
-    print("=" * 50)
-    
-    app.run(debug=True, host='0.0.0.0', port=5000)
+# Error handlers
+@app.errorhandler(404)
+def page_not_found(e):
+    return jsonify({
+        'success': False,
+        'message': 'Endpoint tidak ditemukan',
+        'error': str(e)
+    }), 404
+
+@app.errorhandler(500)
+def internal_server_error(e):
+    return jsonify({
+        'success': False,
+        'message': 'Terjadi kesalahan internal server',
+        'error': str(e)
+    }), 500
+
+if __name__ == "__main__":
+    import os
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port, debug=True)
