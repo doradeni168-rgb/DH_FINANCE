@@ -1,7 +1,6 @@
-Flask
-Flask-Login
-Flask-Cors
-pandas
-numpy
-gunicorn
-werkzeug
+Flask==2.2.5
+Flask-CORS==4.0.0
+Flask-JWT-Extended==4.5.3
+Flask-Bcrypt==1.0.1
+Flask-SQLAlchemy==3.1.1
+python-dotenv==1.0.0
